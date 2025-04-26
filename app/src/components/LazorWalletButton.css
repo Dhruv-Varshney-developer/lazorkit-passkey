@@ -1,0 +1,42 @@
+.lazor-wallet-button {
+  width: 100%;
+  max-width: 220px;
+  margin: 10px auto;
+}
+
+.lazor-connected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  padding: 8px 12px;
+  margin-top: 10px;
+}
+
+.lazor-pubkey {
+  font-family: monospace;
+  font-size: 14px;
+  color: #eee;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+
+.disconnect-button {
+  background-color: #ff3b30 !important;
+  color: white !important;
+  border: none !important;
+  border-radius: 4px;
+  padding: 4px 8px !important;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  width: auto !important;
+  margin: 0 0 0 10px !important;
+}
+
+.disconnect-button:hover {
+  background-color: #ff6651 !important;
+}
