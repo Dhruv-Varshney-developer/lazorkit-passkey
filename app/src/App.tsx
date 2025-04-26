@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Button from "./components/Button";
 import Square from "./components/Square";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import Alert from "./components/Alert";
-import {  Program, Provider } from "@coral-xyz/anchor";
+import { LazorWalletButton } from "./components/LazorWalletButton";
+import { useLazorWallet } from "./contexts/LazorWalletContext";
+import { Program, Provider } from "@coral-xyz/anchor";
 import { SimpleProvider } from "./components/Wallet";
 import {
   AccountInfo,
@@ -24,10 +24,20 @@ const COUNTER_PROGRAM = new PublicKey(
 );
 
 const App: React.FC = () => {
-  let { connection } = useConnection();
+  // Use Lazorkit context instead of Solana wallet adapter
+  const { publicKey, isConnected, sendTransaction } = useLazorWallet();
+
+  // Set up connections
+  const connectionRef = useRef<Connection>(
+    new Connection(
+      process.env.REACT_APP_SOLANA_RPC_URL || "https://api.devnet.solana.com"
+    )
+  );
+  const connection = connectionRef.current;
   const ephemeralConnection = useRef<Connection | null>(null);
   const provider = useRef<Provider>(new SimpleProvider(connection));
-  const { publicKey, sendTransaction } = useWallet();
+
+  // Keep original refs and state for the counter functionality
   const tempKeypair = useRef<Keypair | null>(null);
   const [counter, setCounter] = useState<number>(1);
   const [ephemeralCounter, setEphemeralCounter] = useState<number>(1);
@@ -45,7 +55,7 @@ const App: React.FC = () => {
   let counterSubscriptionId = useRef<number | null>(null);
   let ephemeralCounterSubscriptionId = useRef<number | null>(null);
 
-  // Helpers to Dynamically fetch the IDL and initialize the program client
+  // Helpers to fetch IDL and initialize program client
   const getProgramClient = useCallback(
     async (program: PublicKey): Promise<Program> => {
       const idl = await Program.fetchIdl(program, provider.current);
@@ -55,7 +65,7 @@ const App: React.FC = () => {
     [provider]
   );
 
-  // Define callbacks function to handle account changes
+  // Define callbacks to handle account changes
   const handleCounterChange = useCallback(
     (accountInfo: AccountInfo<Buffer>) => {
       if (!counterProgramClient.current) return;
@@ -83,14 +93,13 @@ const App: React.FC = () => {
     []
   );
 
-  // Subscribe to the counters updates
+  // Subscribe to counter updates
   const subscribeToCounter = useCallback(async (): Promise<void> => {
     if (counterSubscriptionId && counterSubscriptionId.current)
       await connection.removeAccountChangeListener(
         counterSubscriptionId.current
       );
     console.log("Subscribing to counter", counterPda.toBase58());
-    // Subscribe to counter changes
     counterSubscriptionId.current = connection.onAccountChange(
       counterPda,
       handleCounterChange,
@@ -98,7 +107,7 @@ const App: React.FC = () => {
     );
   }, [connection, counterPda, handleCounterChange]);
 
-  // Subscribe to the ephemeral counter updates
+  // Subscribe to ephemeral counter updates
   const subscribeToEphemeralCounter = useCallback(async (): Promise<void> => {
     if (!ephemeralConnection.current) return;
     console.log("Subscribing to ephemeral counter", counterPda.toBase58());
@@ -109,7 +118,6 @@ const App: React.FC = () => {
       await ephemeralConnection.current.removeAccountChangeListener(
         ephemeralCounterSubscriptionId.current
       );
-    // Subscribe to ephemeral counter changes
     ephemeralCounterSubscriptionId.current =
       ephemeralConnection.current.onAccountChange(
         counterPda,
@@ -118,6 +126,7 @@ const App: React.FC = () => {
       );
   }, [counterPda, handleEphemeralCounterChange]);
 
+  // Initialize program client
   useEffect(() => {
     const initializeProgramClient = async () => {
       if (counterProgramClient.current) return;
@@ -127,8 +136,9 @@ const App: React.FC = () => {
       );
       if (accountInfo) {
         // @ts-ignore
-        const counter =
-          await (counterProgramClient.current.account as any).counter.fetch(counterPda);
+        const counter = await (
+          counterProgramClient.current.account as any
+        ).counter.fetch(counterPda);
         setCounter(Number(counter.count.valueOf()));
         setIsDelegated(!accountInfo.owner.equals(COUNTER_PROGRAM));
         await subscribeToCounter();
@@ -137,26 +147,22 @@ const App: React.FC = () => {
     initializeProgramClient().catch(console.error);
   }, [connection, counterPda, getProgramClient, subscribeToCounter]);
 
-  // Detect when publicKey is set/connected
+  // Create temp keypair when wallet connects
   useEffect(() => {
-    if (!publicKey) return;
-    if (
-      !publicKey ||
-      Keypair.fromSeed(publicKey.toBytes()).publicKey.equals(
-        tempKeypair.current?.publicKey || PublicKey.default
-      )
-    )
-      return;
-    console.log("Wallet connected with publicKey:", publicKey.toBase58());
-    // Derive the temp keypair from the publicKey
-    const newTempKeypair = Keypair.fromSeed(publicKey.toBytes());
+    if (!publicKey || !isConnected) return;
+
+    console.log("Wallet connected with publicKey:", publicKey);
+    // Create deterministic temp keypair from public key
+    const pubkeyObj = new PublicKey(publicKey);
+    const newTempKeypair = Keypair.fromSeed(pubkeyObj.toBytes());
     tempKeypair.current = newTempKeypair;
     console.log("Temp Keypair", newTempKeypair.publicKey.toBase58());
-  }, [connection, publicKey]);
+  }, [publicKey, isConnected]);
 
+  // Check and transfer funds to temp keypair if needed
   useEffect(() => {
     const checkAndTransfer = async () => {
-      if (tempKeypair.current) {
+      if (tempKeypair.current && publicKey) {
         const accountTmpWallet = await connection.getAccountInfo(
           tempKeypair.current.publicKey
         );
@@ -168,10 +174,13 @@ const App: React.FC = () => {
         }
       }
     };
-    checkAndTransfer();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDelegated, connection]);
 
+    if (isConnected && publicKey) {
+      checkAndTransfer();
+    }
+  }, [isDelegated, connection, isConnected, publicKey]);
+
+  // Initialize ephemeral connection
   useEffect(() => {
     const initializeEphemeralConnection = async () => {
       const cluster =
@@ -191,8 +200,9 @@ const App: React.FC = () => {
       );
       if (accountInfo) {
         // @ts-ignore
-        const counter =
-          await (counterProgramClient.current?.account as any).counter.fetch(counterPda);
+        const counter = await (
+          counterProgramClient.current?.account as any
+        ).counter.fetch(counterPda);
         setEphemeralCounter(Number(counter.count.valueOf()));
         await subscribeToCounter();
       }
@@ -205,6 +215,7 @@ const App: React.FC = () => {
     await increaseCounterTx();
   };
 
+  // Submit transaction helper
   const submitTransaction = useCallback(
     async (
       transaction: Transaction,
@@ -212,87 +223,96 @@ const App: React.FC = () => {
       ephemeral: boolean = false,
       confirmCommitment: Commitment = "processed"
     ): Promise<string | null> => {
-      if (!tempKeypair.current) return null;
-      if (!publicKey) return null;
+      if (!tempKeypair.current && !publicKey) return null;
+      if (!isConnected) return null;
       if (!ephemeralConnection.current) return null;
-      //if (isSubmitting) return null;
+
       setIsSubmitting(true);
       setTransactionError(null);
       setTransactionSuccess(null);
-      let connection = ephemeral
-        ? ephemeralConnection.current
-        : provider.current.connection;
+
+      let txConnection = ephemeral ? ephemeralConnection.current : connection;
+
       try {
         const {
           context: { slot: minContextSlot },
           value: { blockhash, lastValidBlockHeight },
-        } = await connection.getLatestBlockhashAndContext();
-        console.log("Submitting transaction...");
-        if (!transaction.recentBlockhash)
+        } = await txConnection.getLatestBlockhashAndContext();
+
+        if (!transaction.recentBlockhash) {
           transaction.recentBlockhash = blockhash;
-        if (!transaction.feePayer)
-          useTempKeypair
-            ? (transaction.feePayer = tempKeypair.current.publicKey)
-            : (transaction.feePayer = publicKey);
-        if (useTempKeypair) transaction.sign(tempKeypair.current);
-        let signature;
-        if (!ephemeral && !useTempKeypair) {
-          signature = await sendTransaction(transaction, connection, {
-            minContextSlot,
-          });
-        } else {
-          signature = await connection.sendRawTransaction(
+        }
+
+        if (!transaction.feePayer) {
+          if (useTempKeypair && tempKeypair.current) {
+            transaction.feePayer = tempKeypair.current.publicKey;
+          } else if (publicKey) {
+            transaction.feePayer = new PublicKey(publicKey);
+          }
+        }
+
+        let signature: string | null = null;
+
+        if (useTempKeypair && tempKeypair.current) {
+          // Sign with temp keypair
+          transaction.sign(tempKeypair.current);
+          signature = await txConnection.sendRawTransaction(
             transaction.serialize(),
             { skipPreflight: true }
           );
+        } else {
+          // Sign with Lazorkit wallet
+          signature = await sendTransaction(transaction, txConnection, true);
         }
-        await connection.confirmTransaction(
-          { blockhash, lastValidBlockHeight, signature },
-          confirmCommitment
-        );
-        // Transaction was successful
-        console.log(`Transaction confirmed: ${signature}`);
-        setTransactionSuccess(`Transaction confirmed`);
-        return signature;
+
+        if (signature) {
+          await txConnection.confirmTransaction(
+            { blockhash, lastValidBlockHeight, signature },
+            confirmCommitment
+          );
+
+          console.log(`Transaction confirmed: ${signature}`);
+          setTransactionSuccess(`Transaction confirmed`);
+          return signature;
+        }
+
+        return null;
       } catch (error) {
+        console.error("Transaction error:", error);
         setTransactionError(`Transaction failed: ${error}`);
+        return null;
       } finally {
         setIsSubmitting(false);
       }
-      return null;
     },
-    [publicKey, sendTransaction, tempKeypair]
+    [publicKey, isConnected, connection, sendTransaction]
   );
 
-  /**
-   * Transfer some SOL to temp keypair
-   */
+  // Transfer SOL to temp keypair
   const transferToTempKeypair = useCallback(async () => {
-    if (!publicKey || !tempKeypair.current) return;
+    if (!publicKey || !isConnected || !tempKeypair.current) return;
+
     console.log("Transfer some SOL to temp keypair");
     const transaction = new Transaction().add(
       SystemProgram.transfer({
-        fromPubkey: publicKey,
+        fromPubkey: new PublicKey(publicKey),
         toPubkey: tempKeypair.current.publicKey,
         lamports: 0.1 * LAMPORTS_PER_SOL,
       })
     );
-    transaction.feePayer = publicKey;
+
+    transaction.feePayer = new PublicKey(publicKey);
     transaction.recentBlockhash = (
       await connection.getLatestBlockhash()
     ).blockhash;
-    await submitTransaction(transaction);
-  }, [publicKey, tempKeypair, connection, submitTransaction]);
 
-  /**
-   * Increase counter transaction
-   */
+    await submitTransaction(transaction);
+  }, [publicKey, isConnected, tempKeypair, connection, submitTransaction]);
+
+  // Increase counter transaction
   const increaseCounterTx = useCallback(async () => {
-    if (!tempKeypair.current) return;
-    if (!counterProgramClient.current) {
-        console.error('Counter program client not initialized');
-        return;
-      }
+    if (!tempKeypair.current || !counterProgramClient.current) return;
+
     if (!isDelegated) {
       const accountTmpWallet = await connection.getAccountInfo(
         tempKeypair.current.publicKey
@@ -305,14 +325,14 @@ const App: React.FC = () => {
       }
     }
 
-    const transaction = (await counterProgramClient.current.methods
+    const transaction = await counterProgramClient.current.methods
       .multiply()
       .accounts({
         counter: counterPda,
       })
-      .transaction());
+      .transaction();
 
-    // Add instruction to print to the noop program and and make the transaction unique
+    // Add instruction to make transaction unique
     const noopInstruction = new TransactionInstruction({
       programId: new PublicKey("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV"),
       keys: [],
@@ -329,22 +349,22 @@ const App: React.FC = () => {
     transferToTempKeypair,
   ]);
 
-  /**
-   * Delegate PDA transaction
-   */
+  // Delegate PDA transaction
   const delegatePdaTx = useCallback(async () => {
-    console.log("Delegate PDA transaction");
-    console.log(tempKeypair.current);
     if (!tempKeypair.current) return;
+
+    console.log("Delegate PDA transaction");
     const accountTmpWallet = await connection.getAccountInfo(
       tempKeypair.current.publicKey
     );
+
     if (
       !accountTmpWallet ||
       accountTmpWallet.lamports <= 0.01 * LAMPORTS_PER_SOL
     ) {
       await transferToTempKeypair();
     }
+
     const transaction = (await counterProgramClient.current?.methods
       .delegate()
       .accounts({
@@ -352,6 +372,7 @@ const App: React.FC = () => {
         pda: counterPda,
       })
       .transaction()) as Transaction;
+
     setEphemeralCounter(Number(counter));
     await submitTransaction(transaction, true, false, "confirmed");
   }, [
@@ -362,11 +383,10 @@ const App: React.FC = () => {
     transferToTempKeypair,
   ]);
 
-  /**
-   * Undelegate PDA transaction
-   */
+  // Undelegate PDA transaction
   const undelegatePdaTx = useCallback(async () => {
     if (!tempKeypair.current) return;
+
     console.log("Undelegate PDA transaction");
     const transaction = (await counterProgramClient.current?.methods
       .undelegate()
@@ -379,10 +399,6 @@ const App: React.FC = () => {
     await submitTransaction(transaction, true, true);
   }, [tempKeypair, counterPda, submitTransaction]);
 
-  /**
-   * -------
-   */
-
   const delegateTx = useCallback(async () => {
     await delegatePdaTx();
   }, [delegatePdaTx]);
@@ -394,21 +410,27 @@ const App: React.FC = () => {
   return (
     <div className="counter-ui">
       <div className="wallet-buttons">
-        <WalletMultiButton />
+        {/* Replace Solana wallet button with Lazorkit */}
+        <LazorWalletButton />
       </div>
 
-      <h1>Ephemeral Counter</h1>
+      <h1>Ephemeral Counter with Passkeys</h1>
+      {isConnected && publicKey && (
+        <p className="connection-status">
+          Connected with Passkey Authentication
+        </p>
+      )}
 
       <div className="button-container">
         <Button
           title={"Delegate"}
           resetGame={delegateTx}
-          disabled={isDelegated}
+          disabled={isDelegated || !isConnected}
         />
         <Button
           title={"Undelegate"}
           resetGame={undelegateTx}
-          disabled={!isDelegated}
+          disabled={!isDelegated || !isConnected}
         />
       </div>
 
@@ -430,6 +452,7 @@ const App: React.FC = () => {
           clsName={isDelegated ? ephemeralCounter.toString() : ""}
         />
       </div>
+
       {isSubmitting && (
         <div
           style={{

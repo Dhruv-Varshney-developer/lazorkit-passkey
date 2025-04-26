@@ -231,3 +231,29 @@ body {
     margin-left: 5px;
     margin-right: 0;
 }
+
+/* Add these styles to your existing index.css file */
+
+.connection-status {
+    color: #49ff58;
+    font-size: 14px;
+    margin-top: 5px;
+    margin-bottom: 20px;
+  }
+  
+  /* Make the lazor wallet button responsive */
+  @media (max-width: 480px) {
+    .lazor-wallet-button {
+      max-width: 100%;
+    }
+    
+    .lazor-connected {
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .disconnect-button {
+      width: 100% !important;
+      margin: 0 !important;
+    }
+  }
